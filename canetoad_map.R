@@ -1,6 +1,4 @@
 # cane toad spread map 2023 report
-setwd("C:/Users/shosh/OneDrive/1 Ecology work/AusEnv 2023")
-
 # library
 pacman::p_load(galah, janitor, ozmaps, sf, smoothr, terra, tidyterra, tidyverse)
 
