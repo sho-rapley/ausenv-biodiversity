@@ -3,7 +3,6 @@
 
 # set up
 pacman::p_load(janitor, tidyverse, readxl)
-setwd("C:/Users/shosh/OneDrive/1 Ecology work/AusEnv 2023")
 
 # notes on data sources:
 #' Current list (29/1/24): manually formatted in long format; I used the currently accepted 
@@ -99,3 +98,6 @@ write.csv(epbc, "epbc_processed_2023.csv", row.names = FALSE)
 #' a) Genoplesium vernale AKA Corunastylis vernalis
 #' b) Galaxias truttaceus (Western Australian population)
 #' c) Phascolarctos cinereus (combined populations of Qld, NSW and the ACT)
+#' 
+#' 
+#' In 2024 should be able to append the list changes to the 2023 processed list. 
