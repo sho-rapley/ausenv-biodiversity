@@ -16,6 +16,7 @@ zone <- data.frame(
   )
 
 # 1993-2022 data
+# downloaded from https://apps.aims.gov.au/metadata/view/5bb9a340-4ade-11dc-8f56-00008a07204e
 coral_past <- read.csv("manta-tow-by-reef.csv") %>%
   clean_names() %>%
   left_join(zone, by = "sector") %>%
@@ -25,7 +26,8 @@ coral_past <- read.csv("manta-tow-by-reef.csv") %>%
             reef_count = length(report_year),
             ci = as.numeric(1.96*(sd/sqrt(reef_count))))
 
-# 2023 data
+# 2023 data - manually imported from the reef data viewer by sector 
+# https://apps.aims.gov.au/reef-monitoring/sector/list 
 coral_2023 <- read.csv("manta-tow-2023.csv") %>%
   clean_names() %>%
   left_join(zone, by = "sector") %>%
@@ -47,8 +49,23 @@ ggplot(data=coral)+
                   ymax = coral_cover + ci, 
                   x = report_year), fill = "skyblue", alpha = .4)+
   geom_line(aes(report_year, coral_cover))+
-  geom_point(aes(report_year, coral_cover))+
+  geom_point(data = subset(coral, report_year==2023), aes(report_year, coral_cover))+
   theme_classic()+
   ylim(0, 50)+
   facet_wrap(~zone)
-            
+
+# whole reef
+coral2 <- coral %>%
+  group_by(report_year) %>%
+  summarise(coral_cover = mean(coral_cover),
+            ci = mean(ci))
+
+# plot
+ggplot(data=coral2)+
+  geom_ribbon(aes(ymin = coral_cover - ci, 
+                  ymax = coral_cover + ci, 
+                  x = report_year), fill = "skyblue", alpha = .4)+
+  geom_line(aes(report_year, coral_cover))+
+  geom_point(data = subset(coral2, report_year==2023), aes(report_year, coral_cover))+
+  theme_classic()+
+  ylim(0, 50)
