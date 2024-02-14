@@ -98,6 +98,8 @@ write.csv(epbc, "epbc_processed_2023.csv", row.names = FALSE)
 #' a) Genoplesium vernale AKA Corunastylis vernalis
 #' b) Galaxias truttaceus (Western Australian population)
 #' c) Phascolarctos cinereus (combined populations of Qld, NSW and the ACT)
+#' d) Vappodes phalaenopsis AKA Dendrobium bigibbum (Cooktown orchid)
 #' 
+#' 5) missing species: Macrozamia platyrhachis, listed endangered 2000
 #' 
 #' In 2024 should be able to append the list changes to the 2023 processed list. 

@@ -5,7 +5,7 @@
 # library
 pacman::p_load(janitor, tidyverse)
 
-# coral reef zones (north, central, southern) by sector
+# coral reef zones (north, central, southern) by sector- not using but i'll keep anyway
 zone <- data.frame(
   sector = c("CG", "PC", "CL",
              "CA", "IN", "TO", "CU", "WH",
@@ -19,8 +19,7 @@ zone <- data.frame(
 # downloaded from https://apps.aims.gov.au/metadata/view/5bb9a340-4ade-11dc-8f56-00008a07204e
 coral_past <- read.csv("manta-tow-by-reef.csv") %>%
   clean_names() %>%
-  left_join(zone, by = "sector") %>%
-  group_by(report_year, zone) %>%
+  group_by(report_year) %>%
   summarise(coral_cover = mean(mean_live_coral),
             sd = sd(mean_live_coral),
             reef_count = length(report_year),
@@ -30,8 +29,7 @@ coral_past <- read.csv("manta-tow-by-reef.csv") %>%
 # https://apps.aims.gov.au/reef-monitoring/sector/list 
 coral_2023 <- read.csv("manta-tow-2023.csv") %>%
   clean_names() %>%
-  left_join(zone, by = "sector") %>%
-  group_by(report_year, zone) %>%
+  group_by(report_year) %>%
   summarise(coral_cover = mean(live_hard_coral_cover),
             sd = sd(live_hard_coral_cover),
             reef_count = length(report_year),
@@ -48,24 +46,7 @@ ggplot(data=coral)+
   geom_ribbon(aes(ymin = coral_cover - ci, 
                   ymax = coral_cover + ci, 
                   x = report_year), fill = "skyblue", alpha = .4)+
-  geom_line(aes(report_year, coral_cover))+
   geom_point(data = subset(coral, report_year==2023), aes(report_year, coral_cover))+
-  theme_classic()+
-  ylim(0, 50)+
-  facet_wrap(~zone)
-
-# whole reef
-coral2 <- coral %>%
-  group_by(report_year) %>%
-  summarise(coral_cover = mean(coral_cover),
-            ci = mean(ci))
-
-# plot
-ggplot(data=coral2)+
-  geom_ribbon(aes(ymin = coral_cover - ci, 
-                  ymax = coral_cover + ci, 
-                  x = report_year), fill = "skyblue", alpha = .4)+
   geom_line(aes(report_year, coral_cover))+
-  geom_point(data = subset(coral2, report_year==2023), aes(report_year, coral_cover))+
   theme_classic()+
   ylim(0, 50)
