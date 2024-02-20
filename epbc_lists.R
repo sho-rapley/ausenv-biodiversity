@@ -18,7 +18,7 @@ pacman::p_load(janitor, tidyverse, readxl)
 #' https://www.environment.gov.au/cgi-tmp/publiclistchanges.407465b1b51cc727df3e.html
 
 # Make table for initial listings of later removed species
-initial <- read_excel("epbc_listings.xlsx", sheet = "Removals") %>%
+initial <- read_excel("epbc_listings_to2023.xlsx", sheet = "Removals") %>%
   clean_names() %>%
   subset(grepl("Increase", reason) | grepl("Relisted", reason)) %>%
   select(c("group","species","name","previous_status","year_first_listed")) %>%
@@ -28,7 +28,7 @@ initial <- read_excel("epbc_listings.xlsx", sheet = "Removals") %>%
   mutate(effective = gsub("2000",as_date("16/07/2000", format = "%d/%m/%Y"), effective))
 
 # Make table for initial listings of later transferred species
-transfers <- read_excel("epbc_listings.xlsx", sheet = "Changes") %>%
+transfers <- read_excel("epbc_listings_to2023.xlsx", sheet = "Changes") %>%
   clean_names() %>%
   filter(str_detect(status, "Transfer")) %>%
   mutate(status = word(status, start=3L)) %>%
@@ -39,10 +39,10 @@ transfers <- read_excel("epbc_listings.xlsx", sheet = "Changes") %>%
   mutate(effective = as_date("16/07/2000", format = "%d/%m/%Y"))
 
 # Join all data
-epbc <- read_excel("epbc_listings.xlsx", sheet = "Fauna") %>%
-  rbind(read_excel("epbc_listings.xlsx", sheet = "Flora")) %>%
-  rbind(read_excel("epbc_listings.xlsx", sheet = "Changes")) %>%
-  rbind(read_excel("epbc_listings.xlsx", sheet = "Delist")) %>%
+epbc <- read_excel("epbc_listings_to2023.xlsx", sheet = "Fauna") %>%
+  rbind(read_excel("epbc_listings_to2023.xlsx", sheet = "Flora")) %>%
+  rbind(read_excel("epbc_listings_to2023.xlsx", sheet = "Changes")) %>%
+  rbind(read_excel("epbc_listings_to2023.xlsx", sheet = "Delist")) %>%
   clean_names() %>%
   rbind(transfers) %>%
   rbind(initial) %>%
@@ -103,3 +103,104 @@ write.csv(epbc, "epbc_processed_2023.csv", row.names = FALSE)
 #' 5) missing species: Macrozamia platyrhachis, listed endangered 2000
 #' 
 #' In 2024 should be able to append the list changes to the 2023 processed list. 
+
+## Populate list for completeness by calendar year
+
+# read in data
+epbc <- read.csv("epbc_processed_2023.csv") %>%
+  mutate(status2 = gsub("Transfer from ..* to ", "", status),
+         year = as.numeric(year)) %>%
+  subset(!year==2024)
+
+# add column for number of times listed
+epbc_count <- epbc %>%
+  group_by(species) %>% 
+  summarise(n = n()) 
+epbc <- left_join(epbc, epbc_count)
+
+# add years to 2023 for single listed species
+sp <- unique(epbc$species)
+epbc1 <- subset(epbc, n==1)
+epbc1_full <- data.frame()
+
+for(i in 1:length(sp)){
+  temp <- filter(epbc1, species == sp[i])
+  if(length(temp$year)==0) {
+    next
+  }
+  yrs <- data.frame(species = sp[i],
+                    year2 = temp$year:2023)
+  out <- left_join(temp, yrs)
+  epbc1_full <- rbind(epbc1_full, out)
+}
+
+# add years to listing change and to 2023 for species that changed status
+epbc2 <- subset(epbc, n==2)
+epbc2_dup <- distinct(epbc2, species, .keep_all = TRUE)
+epbc2_full <- data.frame()
+
+for(i in 1:length(sp)){
+  temp <- filter(epbc2, species == sp[i])
+  if(nrow(temp)==0) {
+    next
+  }
+  status <- unique(temp$status2)
+  listed <- unique(temp$year)
+  change1 <- data.frame(species = sp[i],
+                        status2 = status[1],
+                       year2 = listed[1]:(listed[2]-1))
+  change2 <- data.frame(species = sp[i],
+                        status2 = status[2],
+                        year2 = listed[2]:2023)
+  changes <- rbind(change1, change2)
+  line <- filter(epbc2_dup, species == sp[i]) %>%
+    select(!status2)
+  out <- left_join(line, changes, by = join_by(species))
+  epbc2_full <- rbind(epbc2_full, out)
+}
+
+# add years to listing change and to 2023 for species that changed status twice
+epbc3 <- subset(epbc, n==3)
+epbc3_dup <- distinct(epbc3, species, .keep_all = TRUE)
+epbc3_full <- data.frame()
+
+for(i in 1:length(sp)){
+  temp <- filter(epbc3, species == sp[i])
+  if(nrow(temp)==0) {
+    next
+  }
+  status <- temp$status2
+  listed <- unique(temp$year)
+  change1 <- data.frame(species = sp[i],
+                        status2 = status[1],
+                        year2 = listed[1]:(listed[2]-1))
+  change2 <- data.frame(species = sp[i],
+                        status2 = status[2],
+                        year2 = listed[2]:(listed[3]-1))
+  change3 <- data.frame(species = sp[i],
+                        status2 = status[3],
+                        year2 = listed[3]:2023)
+  changes <- rbind(change1, change2, change3)
+  line <- filter(epbc3_dup, species == sp[i]) %>%
+    select(!status2)
+  out <- left_join(line, changes, by = join_by(species))
+  epbc3_full <- rbind(epbc3_full, out)
+}
+
+# rediscoveries
+redisc <- unique(filter(epbc, listing=="Rediscovered")$species)
+
+# combine all
+epbc_all <- rbind(epbc1_full, epbc2_full, epbc3_full) %>%
+  # remove years where delisted
+  filter(!status2=="Delist") %>%
+  select(c(group, species, name, status2, year2)) %>%
+  rename(status = status2,
+         year = year2) %>%
+  # remove extinction status of rediscovered species
+  mutate(temp = ifelse(species %in% redisc & status == "Extinct", 1,0)) %>%
+  filter(temp==0) %>%
+  select(!temp)
+
+# write out
+write.csv(epbc_all, "epbc_processed_2023.csv", row.names = FALSE)

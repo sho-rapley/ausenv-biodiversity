@@ -17,7 +17,7 @@ zone <- data.frame(
 
 # 1993-2022 data
 # downloaded from https://apps.aims.gov.au/metadata/view/5bb9a340-4ade-11dc-8f56-00008a07204e
-coral_past <- read.csv("manta-tow-by-reef.csv") %>%
+coral_past <- read.csv("manta-tow-1993-2022.csv") %>%
   clean_names() %>%
   group_by(report_year) %>%
   summarise(coral_cover = mean(mean_live_coral),
