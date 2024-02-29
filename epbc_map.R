@@ -1,24 +1,88 @@
 # Threatened species map for 2023 report
 
 # library
-pacman::p_load(janitor, sf, terra, tidyterra, tidyverse)
+pacman::p_load(janitor, ozmaps, paletteer, sf, terra, tidyterra, tidyverse)
 
-# processed listing data
-list <- read.csv("epbc_processed_2023.csv") %>%
-  mutate(status = gsub("Transfer from ..* to ", "", status))
-
-# taxonomic changes
-taxon <- read.csv("epbc_taxonomy.csv")
+# ibra subregions
+# Available at: https://fed.dcceew.gov.au/datasets/14495298f2744efd8960ff952a15ee9d
+ibra <- vect("ibra61_reg/ibra61_reg.shp") %>%
+  clean_names() %>%
+  select(reg_name)
 
 # TS public grid shapefiles - not in directory because too large.
 # Available at: https://www.environment.gov.au/fed/catalog/search/resource/details.page?uuid=%7B337B05B6-254E-47AD-A701-C55D9A0435EA%7D
-ts <- vect("TS_grids/SNES_Public.shp")
+ts <- vect("TS_grids/SNES_Public.shp") %>%
+  clean_names() %>%
+  filter(threatened %in% c("Critically Endangered", "Conservation Dependent",
+                           "Vulnerable", "Endangered")) %>%
+  project(crs(ibra))
+
+# threatened species data frame without geometry
+ts_df <- ts %>%
+  st_as_sf() %>%
+  st_drop_geometry()
+
+# count marine species
+sp_marine <- ts_df %>%
+  filter(marine == "Listed") %>%
+  select(scientific) %>%
+  distinct()
+
+# count terrestrial threatened species by subregion
+sp_terra <- ts %>%
+  filter(is.na(marine) | marine == "Listed - overfly marine area")
+
+ibra_ts <- terra::intersect(sp_terra, ibra)
+
+ibra_ts_count <- ibra_ts %>%
+  st_as_sf() %>%
+  st_drop_geometry() %>%
+  select(c("scientific", "reg_name")) %>%
+  distinct() %>%
+  group_by(reg_name) %>%
+  summarise(ts_count = length(scientific))
+
+# create polygon for marine species
+marine <- vect(ext(c(110, 155, -45, -9)), crs(ibra)) %>%
+  erase(ibra) %>%
+  st_as_sf() %>%
+  mutate(reg_name = "Marine",
+         ts_count = nrow(sp_marine)) %>%
+  vect()
+  
+# combine terrestrial and marine polygons
+ibra_ts_all <- left_join(ibra, ibra_ts_count) %>%
+  rbind(marine)
+
+# map
+ggplot()+
+  geom_spatvector(data = ibra_ts_all, aes(fill = ts_count))+
+  paletteer::scale_fill_paletteer_c("grDevices::Geyser")+
+  theme_void()
+
+# count island species
+sp_isl <- ts_df %>%
+  filter(regions %in% c("ACI", "CKI", "CI", "CSI", "NFI", "HMI", "AAT")) %>%
+  group_by(regions) %>%
+  summarise(ts_count = length(unique(scientific)))
+
+#' Next part is to make the interactive map data. 
+#' come back to the section below this later, 
+#' probably instead exporting each species as a file or stacked netcdf. 
+#' Currently it's for loops to extract species by year. 
+#' 
+# processed listing data
+list <- read.csv("epbc_processed_2023.csv")
+
+# taxonomic changes
+taxon <- read.csv("epbc_taxonomy.csv")
 
 # align taxonomy and nomenclature with processed list
 ts2 <- ts %>%
   st_as_sf() %>%
   clean_names() %>%
   subset(!is.na(threatened)) %>%
+  filter(!threatened == "Extinct in the wild") %>%
   mutate(species = ifelse(scientific %in% taxon$Listed, taxon$Accepted, scientific),
          species = gsub(r"{\s*\([^\)]+\)}","", species),
          species = str_squish(species),
@@ -31,8 +95,75 @@ ts2 <- ts %>%
          species = ifelse(listed_tax==75184, "Dasyurus maculatus maculatus (SE mainland population)", species),
          species = ifelse(listed_tax==75183, "Dasyurus maculatus maculatus (Tasmanian population)", species))
 
-# 2023 updates subset
-ts_23 <- subset(ts2, year == 2023)
+temp <- data.frame(original = ts2$scientific, 
+                   new = ts2$species,
+                   common = ts2$vernacular)
+
+#' note to self: there's currently a problem with the taxonomy mutate, it's misaligned
+
+
+# base raster- from previous rasterized biodiversity data
+fish <- rast("Fishes.nc")
+base <- rast(extent = ext(fish), resolution = res(fish))
+
+# list of categories to rasterise
+cats <- c("Critically Endangered", "Endangered", "Vulnerable")
+
+# rasterise threatened species by year
+years <- 2000:2023
+
+out <- base
+
+for(i in 1:24){
+    sub <- subset(list, year == years[7] & status %in% cats)
+    if(nrow(sub)<1){
+      next
+    }
+    sub2 <- sub$species
+    temp <- subset(ts2, species %in% sub2) %>%
+      rasterize(base, fun = "count") 
+    names(temp) <- as.character(years[i])
+    print(names(temp))
+    out <- c(out, temp)
+}
+
+# rasterise threatened species by status and year
+years <- 2000:2023
+cats <- c("Critically Endangered", "Endangered", "Vulnerable")
+out <- base
+
+for(i in 1:24){
+  for(j in 1:3){
+    sub <- subset(list, year == years[i] & status == cats[j])
+    if(nrow(sub)<1){
+      next
+    }
+    sub2 <- sub$species
+    temp <- subset(ts2, species %in% sub2) %>%
+      rasterize(base, fun = "count", background = 0) 
+    names(temp) <- as.character(paste(cats[j], years[i], sep = "_"))
+    print(names(temp))
+    out <- c(out, temp)
+  }
+}
+
+# replace NAs with zeroes
+out2 <- subst(out, from = NA, to = 0)
+
+# plot
+ggplot()+
+  geom_spatraster(data= out2)+
+  facet_wrap(~lyr)
+  scale_fill_viridis_c()+
+  theme_classic()+
+  geom_spatvector(data=test, aes(fill="yellow"))
+
+# test plotting range restricted species
+test <- filter(ts2, species == "Galaxias johnstoni")
 
 ggplot()+
-  geom_sf(data = ts_23, aes(fill = species))
+  #geom_spatraster(data= out2$'2000')+
+  scale_fill_viridis_c()+
+  theme_classic()+
+  geom_spatvector(data=test, colour = "red")+
+  coord_sf(xlim = c(146.1, 146.6), ylim = c(-42.4, -41.9))
