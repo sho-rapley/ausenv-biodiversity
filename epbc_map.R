@@ -17,30 +17,25 @@ ts <- vect("TS_grids/SNES_Public.shp") %>%
                            "Vulnerable", "Endangered")) %>%
   project(crs(ibra))
 
-# threatened species data frame without geometry
-ts_df <- ts %>%
-  st_as_sf() %>%
-  st_drop_geometry()
-
-# count marine species
-sp_marine <- ts_df %>%
-  filter(marine == "Listed") %>%
-  select(scientific) %>%
-  distinct()
-
-# count terrestrial threatened species by subregion
+# count terrestrial threatened species by ibra subregion
 sp_terra <- ts %>%
   filter(is.na(marine) | marine == "Listed - overfly marine area")
 
 ibra_ts <- terra::intersect(sp_terra, ibra)
 
-ibra_ts_count <- ibra_ts %>%
+ibra_ts2 <- ibra_ts %>%
   st_as_sf() %>%
   st_drop_geometry() %>%
   select(c("scientific", "reg_name")) %>%
   distinct() %>%
   group_by(reg_name) %>%
   summarise(ts_count = length(scientific))
+
+# count marine species
+sp_marine <- ts %>%
+  filter(marine == "Listed") %>%
+  select(scientific) %>%
+  distinct()
 
 # create polygon for marine species
 marine <- vect(ext(c(110, 155, -45, -9)), crs(ibra)) %>%
@@ -51,20 +46,43 @@ marine <- vect(ext(c(110, 155, -45, -9)), crs(ibra)) %>%
   vect()
   
 # combine terrestrial and marine polygons
-ibra_ts_all <- left_join(ibra, ibra_ts_count) %>%
+ibra_ts3 <- left_join(ibra, ibra_ts2) %>%
   rbind(marine)
 
-# map
+temp <- st_as_sf(ibra_ts3)
+
+# save polygons
+writeVector(ibra_ts3, "ibra_ts/ibra_ts.shp", filetype = "ESRI Shapefile")
+
+# map (playing with colour options)
 ggplot()+
-  geom_spatvector(data = ibra_ts_all, aes(fill = ts_count))+
-  paletteer::scale_fill_paletteer_c("grDevices::Geyser")+
+  geom_spatvector(data = ibra_ts3, aes(fill = ts_count))+
+  #paletteer::scale_fill_paletteer_c("grDevices::BrBG", direction = 1)+
+  #scale_fill_gradient2(low = "black", mid = "white", high = "#68001DFF", midpoint = 50)+
+  scale_fill_viridis_c(option = "inferno", direction = -1)+
   theme_void()
 
-# count island species
-sp_isl <- ts_df %>%
-  filter(regions %in% c("ACI", "CKI", "CI", "CSI", "NFI", "HMI", "AAT")) %>%
-  group_by(regions) %>%
-  summarise(ts_count = length(unique(scientific)))
+# count species by islands and states and territories
+ts_df <- ts %>%
+  st_as_sf() %>%
+  st_drop_geometry()
+
+juris <- c("ACI", "CKI", "CI", "CSI", "NFI", "HMI", "AAT", 
+             "TAS", "NSW", "JBT", "QLD", "VIC", "WA", "SA", "NT", "ACT")
+ts_juris <- data.frame()
+
+for(i in 1:length(juris)){
+   sp <- ts_df %>%
+    filter(grepl(juris[i], regions)) %>%
+    distinct(scientific)
+   
+   temp <- data.frame(jurisdiction = juris[i],
+                          ts = nrow(sp))
+   
+   ts_juris <- rbind(ts_juris, temp)
+}
+
+
 
 #' Next part is to make the interactive map data. 
 #' come back to the section below this later, 
