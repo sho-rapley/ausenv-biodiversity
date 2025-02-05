@@ -1,0 +1,323 @@
+---
+title: 'Australia''s Environment Report: Biodiversity'
+author: "Shoshana Rapley"
+date: "2025-02-05"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Load packages
+pacman::p_load(janitor, tidyverse, readxl)
+```
+
+# Background
+
+Comprehensive data on changes in biodiversity, species distribution and abundance are either impossible or extremely expensive to collect. Here we summarise national, annual metrics for biodiversity that help us understand how biodiversity is faring.
+
+# EPBC Lists
+
+The Australian Government (DCCEEW) maintains lists of species and ecological communities at risk of extinction. We report on annual changes to the list and cumulative outcomes.
+
+EPBC lists are maintained online on the SPRAT database. I applied the following data formatting steps in the excel file "epbc_listings_to2023.xlsx" (each of the following as tabs) prior to import into R:
+
+* Flora and Fauna list (last updated 29/1/24): I copied the [threatened flora](https://www.environment.gov.au/cgi-bin/sprat/public/publicthreatenedlist.pl?wanted=flora ) and [threatened fauna](https://www.environment.gov.au/cgi-bin/sprat/public/publicthreatenedlist.pl?wanted=fauna) lists from the SPRAT webpage. I manually formatted these tables into long format. I used the currently accepted scientific name when two were listed and removed the naming authority.
+
+* Changes to the list (last updated 29/1/24): I copied the [changes to the EPBC list](https://www.environment.gov.au/cgi-tmp/publiclistchanges.309265b1b3529d5bf13e.html ) from the SPRAT webpage. I used the 'text to columns' function in excel used to split common and binomial names (and removed naming authority). 
+
+* Removals from the list (last updated 1/2/22): I copied the [removals from the EPBC list](https://www.environment.gov.au/cgi-tmp/publiclistchanges.407465b1b51cc727df3e.html) from the SPRAT webpage (page scrape done 1/2/22 and all subsequent additions manually added as new rows). I read all listing advice to determine whether listings were "true" removals i.e. an actual increase of the threatened taxa, rather than taxonomic change or new information. 
+
+## Initial data wrangling
+
+**Note! This section does not need to be done again. For 2024 onward I can append changes to the list to the epbc_processed_2023.csv file - see next section.**
+
+Here I combine the current flora and fauna lists with changes to the list and removals from the list. 
+
+```{r}
+# Make table for initial listings of later removed species
+initial <- read_excel("epbc_listings_to2023.xlsx", sheet = "Removals") %>%
+  clean_names() %>%
+  subset(grepl("Increase", reason) | grepl("Relisted", reason)) %>%
+  select(c("group","species","name","previous_status","year_first_listed")) %>%
+  rename(status = previous_status) %>%
+  rename(effective = year_first_listed) %>%
+  # add an initial listing date
+  mutate(effective = gsub("2000",as_date("16/07/2000", format = "%d/%m/%Y"), effective))
+
+# Make table for initial listings of later transferred species
+transfers <- read_excel("epbc_listings_to2023.xlsx", sheet = "Changes") %>%
+  clean_names() %>%
+  filter(str_detect(status, "Transfer")) %>%
+  mutate(status = word(status, start=3L)) %>%
+  mutate(status = ifelse(str_detect(status, "Critically"),
+                         "Critically Endangered", status)) %>%
+  mutate(status = ifelse(str_detect(status, "Conservation"),
+                         "Conservation Dependent", status)) %>%
+  mutate(effective = as_date("16/07/2000", format = "%d/%m/%Y"))
+
+# Join all data
+epbc <- read_excel("epbc_listings_to2023.xlsx", sheet = "Fauna") %>%
+  rbind(read_excel("epbc_listings_to2023.xlsx", sheet = "Flora")) %>%
+  rbind(read_excel("epbc_listings_to2023.xlsx", sheet = "Changes")) %>%
+  rbind(read_excel("epbc_listings_to2023.xlsx", sheet = "Delist")) %>%
+  clean_names() %>%
+  rbind(transfers) %>%
+  rbind(initial) %>%
+  arrange(species, status) %>%
+  mutate(effective = as_date(effective)) %>%
+  # standardise nomenclature and syntax, remove whitespace
+  mutate(species = str_trim(species,side = c("both")))
+
+# Lost some group data due to non standing naming so retrieving it here
+group <- select(epbc, c(group, species)) %>% arrange(group) %>%
+  filter(!duplicated(species)) %>% arrange(species)
+  
+epbc <- right_join(group, select(epbc, -(group)), by= "species") %>%
+# Remove duplicates where transferred
+  mutate(order = ifelse(str_detect(status, "Transfer"),1,2)) %>%
+  arrange(order) %>%
+  filter(!duplicated(cbind(species, effective))) %>%
+  arrange(species) %>%
+# Remove false initial listings
+  arrange(desc(effective)) %>%
+  filter(!duplicated(cbind(species, status))) %>%
+  arrange(species) %>%
+# Create column for year listed
+  mutate(year = year(effective)) %>%
+# Create column for listing type 
+  mutate(listing = ifelse(grepl("to Extinct",status),"Transfer extinct",
+                   ifelse(grepl("Transfer from Extinct",status),"Rediscovered",
+                   ifelse(grepl("Extinct",status),"Extinct",
+                   ifelse(grepl("Transfer",status),"Transfer",
+                   ifelse(grepl("Delisted",status),"Delisted", "Listed")))))) %>%
+  arrange(status) %>%
+  subset(select = -c(order))
+
+# Export 
+write.csv(epbc, "epbc_temp_2023.csv", row.names = FALSE)
+```
+
+Manual tasks in exported "epbc_temp_2023.csv" file:
+
+1) Check correct listings of the 2 species that were delisted and relisted:
+  a) *Macroderma gigas*	Ghost Bat (true de and re listing) 
+  Mammal	*Macroderma gigas*	Vulnerable	Ghost Bat	16/07/2000	2000	Listed
+  b) *Amytornis textilis myall*	Western Grasswren (true de and re listing) 
+  Bird	*Amytornis textilis myall*	Vulnerable	Western Grasswren 	16/07/2000	2000	Listed
+
+2) Check listing of CI Pipistrelle as there seems to be a timeline issue in the official data; should go endangered 2001 -> uplist CI 2006 -> uplist extinct 2021
+
+3) Manually check for duplicated common names (using conditional formatting) to find taxonomic synonyms to combine; usually occurs for species that were transferred but originally listed after 2000. Usually the initial listing has the outdated name (and therefore the group hasn't been brought across for the new name either).
+
+4) Check duplicated listings in species where naming isn't consistent on the listings:
+  a) *Genoplesium vernale* AKA *Corunastylis vernalis*
+  b) *Galaxias truttaceus* (Western Australian population)
+  c) *Phascolarctos cinereus* (combined populations of Qld, NSW and the ACT)
+  d) *Vappodes phalaenopsis* AKA *Dendrobium bigibbum* (Cooktown orchid)
+
+5) One species is missing from the current flora list but has no record of being delisted or removed from the list: *Macrozamia platyrhachis*, listed endangered 2000
+
+Next, I re-arrange the data so that all species are listed in every calendar year that they occur. This enables us to do an annual summary. 
+
+```{r}
+# read in data
+epbc <- read.csv("epbc_temp_2023.csv") %>%
+  mutate(status2 = gsub("Transfer from ..* to ", "", status),
+         year = as.numeric(year)) %>%
+  subset(!year==2024)
+
+# add column for number of times listed
+epbc_count <- epbc %>%
+  group_by(species) %>% 
+  summarise(n = n()) 
+epbc <- left_join(epbc, epbc_count)
+
+# add years to 2023 for single listed species
+sp <- unique(epbc$species)
+epbc1 <- subset(epbc, n==1)
+epbc1_full <- data.frame()
+
+for(i in 1:length(sp)){
+  temp <- filter(epbc1, species == sp[i])
+  if(length(temp$year)==0) {
+    next
+  }
+  yrs <- data.frame(species = sp[i],
+                    year2 = temp$year:2023)
+  out <- left_join(temp, yrs)
+  epbc1_full <- rbind(epbc1_full, out)
+}
+
+# add years to listing change and to 2023 for species that changed status
+epbc2 <- subset(epbc, n==2)
+epbc2_dup <- distinct(epbc2, species, .keep_all = TRUE)
+epbc2_full <- data.frame()
+
+for(i in 1:length(sp)){
+  temp <- filter(epbc2, species == sp[i])
+  if(nrow(temp)==0) {
+    next
+  }
+  status <- unique(temp$status2)
+  listed <- unique(temp$year)
+  change1 <- data.frame(species = sp[i],
+                        status2 = status[1],
+                       year2 = listed[1]:(listed[2]-1))
+  change2 <- data.frame(species = sp[i],
+                        status2 = status[2],
+                        year2 = listed[2]:2023)
+  changes <- rbind(change1, change2)
+  line <- filter(epbc2_dup, species == sp[i]) %>%
+    select(!status2)
+  out <- left_join(line, changes, by = join_by(species))
+  epbc2_full <- rbind(epbc2_full, out)
+}
+
+# add years to listing change and to 2023 for species that changed status twice
+epbc3 <- subset(epbc, n==3)
+epbc3_dup <- distinct(epbc3, species, .keep_all = TRUE)
+epbc3_full <- data.frame()
+
+for(i in 1:length(sp)){
+  temp <- filter(epbc3, species == sp[i])
+  if(nrow(temp)==0) {
+    next
+  }
+  status <- temp$status2
+  listed <- unique(temp$year)
+  change1 <- data.frame(species = sp[i],
+                        status2 = status[1],
+                        year2 = listed[1]:(listed[2]-1))
+  change2 <- data.frame(species = sp[i],
+                        status2 = status[2],
+                        year2 = listed[2]:(listed[3]-1))
+  change3 <- data.frame(species = sp[i],
+                        status2 = status[3],
+                        year2 = listed[3]:2023)
+  changes <- rbind(change1, change2, change3)
+  line <- filter(epbc3_dup, species == sp[i]) %>%
+    select(!status2)
+  out <- left_join(line, changes, by = join_by(species))
+  epbc3_full <- rbind(epbc3_full, out)
+}
+
+# rediscoveries
+redisc <- unique(filter(epbc, listing=="Rediscovered")$species)
+
+# combine all
+epbc_all <- rbind(epbc1_full, epbc2_full, epbc3_full) %>%
+  # remove years where delisted
+  filter(!status2=="Delist") %>%
+  select(c(group, species, name, status2, year2)) %>%
+  rename(status = status2,
+         year = year2) %>%
+  # remove extinction status of rediscovered species
+  mutate(temp = ifelse(species %in% redisc & status == "Extinct", 1,0)) %>%
+  filter(temp==0) %>%
+  select(!temp)
+
+# write out
+write.csv(epbc_all, "epbc_processed_2023.csv", row.names = FALSE)
+```
+
+## Annual data wrangling
+
+For the 2023 report I did the initial data wrangling (see section above), so for all subsequent reports I can just append the changes in that calendar year.
+
+I copied the annual updates from the [changes to the EPBC list](https://www.environment.gov.au/cgi-tmp/publiclistchanges.309265b1b3529d5bf13e.html) and the [removals from the EPBC list](https://www.environment.gov.au/cgi-tmp/publiclistchanges.268467a2e7a9bb580e3f.html) from the SPRAT webpage. I used the 'text to columns' function in excel used to split common and binomial names (and removed naming authority). I manually added the column "group".
+
+Here we append the 2024 changes to the 2023 list. 
+
+```{r}
+# read in processed listings 2000-2023
+epbc_all <- read.csv("data/epbc_processed_2023.csv")
+
+# read in changes to the list in 2024
+epbc_changes <- read_excel("data/epbc_changes_since2023_2024.xlsx", sheet = 1) %>%
+  clean_names() %>%
+  # drop effective date and add year
+  select(!effective) %>%
+  mutate(year = 2024)
+
+# read in delistings in 2024
+epbc_remove <- read_excel("data/epbc_changes_since2023_2024.xlsx", sheet = 2) %>%
+  clean_names()
+
+remove <- epbc_remove$species
+
+# bring across species from previous calendar year to current calendar year
+epbc_prev <- epbc_all %>%
+  filter(year == 2023) %>%
+  mutate(year = 2024)
+
+# combine full listings with changes to the list
+epbc_2024 <- rbind(epbc_changes, epbc_prev) %>%
+  # where duplicates, keep the transfer listing
+  distinct(species, .keep_all = TRUE) %>%
+  # rename transfers to destination status
+  mutate(status = ifelse(grepl("to Extinct",status),"Extinct",
+                   ifelse(grepl("to Critically Endangered",status),"Critically Endangered",
+                   ifelse(grepl("to Endangered",status),"Endangered",
+                   ifelse(grepl("to Vulnerable",status),"Vulnerable", status))))) %>%
+  # remove species delisted
+  filter(!species %in% remove)
+
+# append to 2000-2023 lists
+epbc_updated <- rbind(epbc_all, epbc_2024) %>%
+  arrange(species)
+
+# write out
+write.csv(epbc_updated, "data/epbc_processed_2024.csv", row.names = FALSE)
+```
+
+## Summary
+
+I summarise the number of species per threat category per year. For graphing simplicity we lump "extinct in the wild" with "extinct" and "conservation dependent" with "vulnerable".
+
+```{r}
+# read in processed data to this calendar year
+epbc <- read.csv("data/epbc_processed_2024.csv") %>%
+  # lump categories
+  mutate(status = ifelse(grepl("Extinct in the wild",status),"Extinct",
+                         ifelse(grepl("Conservation Dependent",status),"Vulnerable",status))) %>%
+  group_by(year, status) %>%
+  summarise(count = length(species))
+```
+
+I make the bar chart in excel for ease of formatting by the graphic design team for the report. But I'll make one here too. 
+
+```{r}
+# reorder epbc for plot
+epbc <- epbc %>%
+  mutate(status = factor(status, levels = c("Extinct", "Critically Endangered", "Endangered", "Vulnerable")))
+
+# stacked bar chart
+ggplot(epbc)+
+  geom_bar(aes(x = year, y = count, group = status, fill = status),
+           position="stack", stat="identity")+
+  theme_classic()+
+  xlab(element_blank())+
+  ylab("Count of species")+
+  scale_fill_manual(values = c("gray5", "firebrick4", "tan1", "lightgoldenrod"))
+```
+
+Wide format for excel.
+
+```{r}
+# pivot wider
+epbc <- epbc %>%
+  pivot_wider(names_from = status, values_from = count)
+
+# write out
+write.csv(epbc, "data/epbc_summary_2024.csv", row.names = FALSE)
+```
+
+## IBRA subregion map
+
+Next
+
+# Coral cover
+
