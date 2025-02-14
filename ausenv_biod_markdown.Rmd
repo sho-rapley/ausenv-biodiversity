@@ -11,7 +11,7 @@ editor_options:
 knitr::opts_chunk$set(echo = TRUE)
 
 # Load packages
-pacman::p_load(janitor, tidyverse, readxl)
+pacman::p_load(janitor, ozmaps, paletteer, readxl, sf, showtext, terra, tidyterra, tidyverse)
 ```
 
 # Background
@@ -116,9 +116,8 @@ Manual tasks in exported "epbc_temp_2023.csv" file:
   a) *Genoplesium vernale* AKA *Corunastylis vernalis*
   b) *Galaxias truttaceus* (Western Australian population)
   c) *Phascolarctos cinereus* (combined populations of Qld, NSW and the ACT)
-  d) *Vappodes phalaenopsis* AKA *Dendrobium bigibbum* (Cooktown orchid)
 
-5) One species is missing from the current flora list but has no record of being delisted or removed from the list: *Macrozamia platyrhachis*, listed endangered 2000
+5) One species is missing from the current flora list but has no record of being delisted or removed from the list: *Macrozamia platyrhachis*, listed endangered 2000. [This seems to be fixed in 2024]
 
 Next, I re-arrange the data so that all species are listed in every calendar year that they occur. This enables us to do an annual summary. 
 
@@ -223,6 +222,8 @@ epbc_all <- rbind(epbc1_full, epbc2_full, epbc3_full) %>%
 write.csv(epbc_all, "epbc_processed_2023.csv", row.names = FALSE)
 ```
 
+Note to self: made an error in 2023. I had one species more than listed on the EPBC - which I narrowed down to being a vulnerable plant listing. I thought that Vappodes phalaenopsis ==	Dendrobium bigibbum but turns out they are indeed different listings. The duplicate I had instead was a name change for Helicteres sp. Glenluckie Creek	to Helicteres macrothrix - which looked like a new listing in 2006 instead of a name change, because of how it was listed on the changes to the EPBC list. I manually fixed this in "epbc_processed_2023.csv" on 14/2/2025.
+
 ## Annual data wrangling
 
 For the 2023 report I did the initial data wrangling (see section above), so for all subsequent reports I can just append the changes in that calendar year.
@@ -240,7 +241,9 @@ epbc_changes <- read_excel("data/epbc_changes_since2023_2024.xlsx", sheet = 1) %
   clean_names() %>%
   # drop effective date and add year
   select(!effective) %>%
-  mutate(year = 2024)
+  mutate(year = 2024) %>%
+  # remove trailing whitespace 
+  mutate(species = str_trim(species))
 
 # read in delistings in 2024
 epbc_remove <- read_excel("data/epbc_changes_since2023_2024.xlsx", sheet = 2) %>%
@@ -251,7 +254,9 @@ remove <- epbc_remove$species
 # bring across species from previous calendar year to current calendar year
 epbc_prev <- epbc_all %>%
   filter(year == 2023) %>%
-  mutate(year = 2024)
+  mutate(year = 2024) %>%
+  # remove species changed in 2024 (these added next step)
+  filter(!species %in% epbc_changes$species)
 
 # combine full listings with changes to the list
 epbc_2024 <- rbind(epbc_changes, epbc_prev) %>%
@@ -265,10 +270,32 @@ epbc_2024 <- rbind(epbc_changes, epbc_prev) %>%
   # remove species delisted
   filter(!species %in% remove)
 
+# Flora 1472 + Fauna 666 = 2138 listed species
+nrow(epbc_2024)
+
 # append to 2000-2023 lists
 epbc_updated <- rbind(epbc_all, epbc_2024) %>%
   arrange(species)
 
+# taxonomic changes in 2024 (I manually keep these as I find them)
+taxon <- read.csv("data/epbc_taxonomy.csv") %>%
+  clean_names() %>%
+  # drop other names
+  select(!c(synonymous_listing, added)) %>%
+  filter(!accepted_name == "")
+
+epbc_updated <- epbc_updated %>%
+  left_join(taxon, by = c("species" = "listed_as")) %>%
+  mutate(
+    species = case_when(
+      !is.na(accepted_name) ~ accepted_name,  # Use new name if available
+      TRUE ~ species                # Keep original if no update needed
+    )
+  ) %>%
+  select(-accepted_name) %>%
+  # remove duplicate records
+  distinct(species, year, .keep_all = TRUE)
+  
 # write out
 write.csv(epbc_updated, "data/epbc_processed_2024.csv", row.names = FALSE)
 ```
@@ -308,16 +335,205 @@ Wide format for excel.
 
 ```{r}
 # pivot wider
-epbc <- epbc %>%
-  pivot_wider(names_from = status, values_from = count)
+epbc_export <- epbc %>%
+  pivot_wider(names_from = status, values_from = count) %>%
+  # add total column
+  mutate(total = rowSums(across(where(is.numeric))))
 
 # write out
-write.csv(epbc, "data/epbc_summary_2024.csv", row.names = FALSE)
+write.csv(epbc_export, "summary/epbc_summary_2024.csv", row.names = FALSE)
 ```
 
 ## IBRA subregion map
 
-Next
+In addition to the time series stacked bar chart, we make an annual map of count of threatened species by [biographic subregion](https://fed.dcceew.gov.au/datasets/14495298f2744efd8960ff952a15ee9d).We get the spatial distribution of threatened species from the [SNES (Species of National Environmental Significance) public database - last version updated 23/09/2024](https://fed.dcceew.gov.au/datasets/9d313bb078b9421ebebc835b3a69c470).
+
+```{r}
+# ibra subregions
+ibra <- vect("shapefiles/ibra61_reg/ibra61_reg.shp") %>%
+  clean_names() %>%
+  select(reg_name)
+
+# SNES geodatabase - only on local, not on github repo
+snes <- vect("shapefiles/snes_public_gdb.gdb") %>%
+  clean_names() %>%
+  # keep only threatened species listings
+  filter(threatened_status %in% c("Critically Endangered", "Conservation Dependent",
+                           "Vulnerable", "Endangered")) %>%
+  # match IBRA projection
+  project(crs(ibra))
+
+# and SNES as a dataframe to reduce computation when geometry not needed
+snes_df <- snes %>%
+  st_as_sf() %>%
+  st_drop_geometry()
+
+length(unique(snes_df$scientific_name))
+```
+
+SNES dataframe has 2034 species, the 2024 list of extant species is 2036 - so which missing?  
+
+```{r}
+# read in epbc taxonomy to standardise names
+taxon <- read.csv("data/epbc_taxonomy.csv") %>%
+  clean_names() %>%
+  # drop other names
+  select(!synonymous_listing) %>%
+  filter(!accepted_name == "")
+
+# read in current epbc list
+epbc <- read.csv("data/epbc_processed_2024.csv") %>%
+  # filter to 2024 and extant
+  filter(year == 2024 & !status == "Extinct") %>%
+  # keep just names
+  select(species, name)
+
+# snes sci names list - standardised to epbc list
+snes_names <- snes_df %>%
+  select(scientific_name, vernacular_name) %>%
+  rename(name = vernacular_name) %>%
+  distinct() %>%
+  left_join(taxon, by = c("scientific_name" = "listed_as")) %>%
+  mutate(
+    # Remove subspecies notation
+    scientific_name = str_remove(scientific_name, "subsp\\. "),
+    # Create standardised name
+    species = case_when(
+      # If there's an accepted name in taxon, use that
+      !is.na(accepted_name) ~ accepted_name,
+      # If the name is in epbc list, keep it as is (with parentheses)
+      scientific_name %in% epbc$species ~ scientific_name,
+      # Otherwise remove parenthetical text
+      TRUE ~ str_remove_all(scientific_name, "\\s*\\([^)]+\\)")
+    )
+  ) %>%
+  # drop old names
+  select(!c(scientific_name, accepted_name))
+
+# Find mismatches in both directions
+mismatches <- bind_rows(
+  snes_names %>% 
+    select(name = species) %>%
+    mutate(source = "snes_only") %>%
+    anti_join(epbc %>% select(name = species)),
+  epbc %>% 
+    select(name = species) %>%
+    mutate(source = "epbc_only") %>%
+    anti_join(snes_names %>% select(name = species))
+) %>%
+  arrange(name)
+```
+
+The SNES polygons are missing Galaxias pedderensis and Lomatia tasmanica. Ah, that's because Galaxias pedderensis is extinct in the wild - so no polygon to be in. For the Lomatia, the SPRAT listing says "The entire population is contained within the Southwest National Park that is part of the Tasmanian Wilderness World Heritage Area" so we can manually add a record to the matching IBRA subregion, which is Tasmanian West (TWE).
+
+For the map, first we count terrestrial species by IBRA subregion.
+
+```{r}
+# filter to terrestrial i.e. not listed as marine or overfly marine
+snes_terra <- snes %>%
+  filter(is.na(marine) | marine == "Listed - overfly marine area")
+
+# find which snes polygons intersect with which ibra regions
+ibra_ts <- terra::intersect(snes_terra, ibra)
+
+# count of terrestrial ts by ibra subregion intersects
+ibra_ts_count <- ibra_ts %>%
+  st_as_sf() %>%
+  st_drop_geometry() %>%
+  select(scientific_name, reg_name) %>%
+  distinct() %>%
+  group_by(reg_name) %>%
+  summarise(ts_count = length(scientific_name)) %>%
+  # add one to Tasmanian West for Lomatia tasmanica
+  mutate(ts_count = ifelse(reg_name=="Tasmanian West", ts_count + 1, ts_count))
+
+# polygons with counts
+ibra_ts_count_map <- left_join(ibra, ibra_ts_count)
+```
+
+Then we count species from Australian waters and island territories, to display as point on map background.
+
+```{r}
+# count marine species
+sp_marine <- snes_df %>%
+  filter(marine == "Listed") %>%
+  select(scientific_name) %>%
+  distinct()
+
+nrow(sp_marine)
+
+# count species by external territories
+juris <- data.frame(acronym = c("ACI", "CKI", "CI", "CSI", "NFI", "HMI", "AAT"),
+                    territory = c("Ashmore and Cartier Islands", "Cocos Keeling Islands", 
+                                  "Christmas Island", "Coral Sea Islands", "Norfolk Island",
+                                  "Heard and Macdonald Islands", "Australian Antarctic Territory"))
+
+ts_juris <- data.frame()
+
+for(i in 1:7){
+   sp <- snes_df %>%
+    filter(grepl(juris$acronym[i], regions)) %>%
+    distinct(scientific_name)
+   
+   temp <- data.frame(name = juris$territory[i],
+                          count = nrow(sp))
+   
+   ts_juris <- rbind(ts_juris, temp)
+}
+
+# combine external territories and Marine
+territories <- ts_juris %>%
+  rbind(data.frame(name = "Australian waters", count = nrow(sp_marine)))
+```
+
+Finally make the map, with terrestrial threatened species by IBRA subregion and inset points for external territories and marine listings. 
+
+```{r}
+# using the package showtext to get the custom font
+font_add(family = "UniNeue-Trial-Book", regular = "fonts/UniNeue-Trial-Book.ttf")
+showtext_auto()
+
+# ggplot ibra subregion with species count, and points and labels for external territories
+map_with_territories <- 
+  ggplot() +
+  geom_spatvector(data = ibra_ts_count_map, aes(fill = ts_count), colour = NA) +
+  scale_fill_viridis_c(
+    option = "inferno", 
+    direction = -1,
+    guide = guide_colorbar(
+      title = NULL,
+      label.theme = element_text(size = 24, family = "UniNeue-Trial-Book")
+    )) +
+  theme_void() +
+  
+  geom_point(
+    data = territories,
+    aes(x = 154, y = -45 + (seq_along(name) * 1.5),
+        fill = count),
+    colour = "white",
+    size = 5,
+    shape = 21,
+    show.legend = FALSE
+  ) +
+  geom_text(
+    data = territories,
+    aes(x = 155, y = -45 + (seq_along(name) * 1.5)),
+    label = territories$name,
+    hjust = 0,
+    vjust = 0.5,
+    size = 7,  # Increased from 3.5 to 5
+    family = "UniNeue-Trial-Book"  # Make sure to specify font family here
+  ) +
+  coord_sf(clip = "off") +
+  theme(plot.margin = margin(r = 150, b = 20))
+
+# save
+ggsave("map_with_territories.png", 
+       map_with_territories, 
+       width = 8,    # Increased width for better text spacing
+       height = 5,  # Slightly increased height
+       dpi = 400)
+```
 
 # Coral cover
 

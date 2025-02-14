@@ -3,11 +3,7 @@
 # library
 pacman::p_load(janitor, ozmaps, paletteer, sf, terra, tidyterra, tidyverse)
 
-# ibra subregions
-# Available at: https://fed.dcceew.gov.au/datasets/14495298f2744efd8960ff952a15ee9d
-ibra <- vect("ibra61_reg/ibra61_reg.shp") %>%
-  clean_names() %>%
-  select(reg_name)
+
 
 # TS public grid shapefiles - not in directory because too large.
 # Available at: https://www.environment.gov.au/fed/catalog/search/resource/details.page?uuid=%7B337B05B6-254E-47AD-A701-C55D9A0435EA%7D
