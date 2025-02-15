@@ -11,7 +11,7 @@ editor_options:
 knitr::opts_chunk$set(echo = TRUE)
 
 # Load packages
-pacman::p_load(janitor, ozmaps, paletteer, readxl, sf, showtext, terra, tidyterra, tidyverse)
+pacman::p_load(galah, janitor, ozmaps, paletteer, readxl, sf, showtext, smoothr, terra, tidyterra, tidyverse)
 ```
 
 # Background
@@ -123,7 +123,7 @@ Next, I re-arrange the data so that all species are listed in every calendar yea
 
 ```{r}
 # read in data
-epbc <- read.csv("epbc_temp_2023.csv") %>%
+epbc <- read_csv("epbc_temp_2023.csv") %>%
   mutate(status2 = gsub("Transfer from ..* to ", "", status),
          year = as.numeric(year)) %>%
   subset(!year==2024)
@@ -234,7 +234,7 @@ Here we append the 2024 changes to the 2023 list.
 
 ```{r}
 # read in processed listings 2000-2023
-epbc_all <- read.csv("data/epbc_processed_2023.csv")
+epbc_all <- read_csv("data/epbc_processed_2023.csv")
 
 # read in changes to the list in 2024
 epbc_changes <- read_excel("data/epbc_changes_since2023_2024.xlsx", sheet = 1) %>%
@@ -278,7 +278,7 @@ epbc_updated <- rbind(epbc_all, epbc_2024) %>%
   arrange(species)
 
 # taxonomic changes in 2024 (I manually keep these as I find them)
-taxon <- read.csv("data/epbc_taxonomy.csv") %>%
+taxon <- read_csv("data/epbc_taxonomy.csv") %>%
   clean_names() %>%
   # drop other names
   select(!c(synonymous_listing, added)) %>%
@@ -306,7 +306,7 @@ I summarise the number of species per threat category per year. For graphing sim
 
 ```{r}
 # read in processed data to this calendar year
-epbc <- read.csv("data/epbc_processed_2024.csv") %>%
+epbc <- read_csv("data/epbc_processed_2024.csv") %>%
   # lump categories
   mutate(status = ifelse(grepl("Extinct in the wild",status),"Extinct",
                          ifelse(grepl("Conservation Dependent",status),"Vulnerable",status))) %>%
@@ -375,14 +375,14 @@ SNES dataframe has 2034 species, the 2024 list of extant species is 2036 - so wh
 
 ```{r}
 # read in epbc taxonomy to standardise names
-taxon <- read.csv("data/epbc_taxonomy.csv") %>%
+taxon <- read_csv("data/epbc_taxonomy.csv") %>%
   clean_names() %>%
   # drop other names
   select(!synonymous_listing) %>%
   filter(!accepted_name == "")
 
 # read in current epbc list
-epbc <- read.csv("data/epbc_processed_2024.csv") %>%
+epbc <- read_csv("data/epbc_processed_2024.csv") %>%
   # filter to 2024 and extant
   filter(year == 2024 & !status == "Extinct") %>%
   # keep just names
@@ -536,4 +536,142 @@ ggsave("map_with_territories.png",
 ```
 
 # Coral cover
+
+In the oceans section of the report we include annual trends in Great Barrier Reef coral cover. Coral cover is collected by the Australian Institute of Marine Science (AIMS) using a benthos manta tow method.
+
+I downloaded the publicly available data from the [AIMS data repository](https://apps.aims.gov.au/metadata/view/5bb9a340-4ade-11dc-8f56-00008a07204e), which is currently for 1993-2023. 
+
+Australian Institute of Marine Science (AIMS). (2015). AIMS Long-term Monitoring Program: Crown-of-thorns starfish and benthos Manta Tow Data (Great Barrier Reef). https://doi.org/10.25845/5c09b0abf315a, accessed 15-Feb-2025.
+
+```{r}
+coral_past <- read_csv("data/manta-tow-1993-2023.csv") %>%
+  clean_names() %>%
+  group_by(report_year) %>%
+  summarise(coral_cover = mean(mean_live_coral),
+            sd = sd(mean_live_coral),
+            reef_count = length(report_year),
+            ci = as.numeric(1.96*(sd/sqrt(reef_count))))
+```
+
+In the future I can just append the annual results to the previous processed output. 
+
+To get the 2024 values I manually imported reports from the [reef data viewer](https://apps.aims.gov.au/reef-monitoring/sector/list) by sector and copying the 2024 table.
+
+```{r}
+# manually downloaded 2024 data
+coral_2024 <- read_csv("data/manta-tow-2024.csv") %>%
+  clean_names() %>%
+  group_by(report_year) %>%
+  summarise(coral_cover = mean(live_hard_coral_cover_percent),
+            sd = sd(live_hard_coral_cover_percent),
+            reef_count = length(report_year),
+            ci = as.numeric(1.96*(sd/sqrt(reef_count))))
+
+# add 2023 to previous data
+coral <- rbind(coral_past, coral_2024)
+
+# write out 
+write.csv(coral, "data/coral_processed_2024.csv", row.names = FALSE)
+```
+
+And plot (again, this will be done by the design team but I want to mock up here because I'm curious).
+
+```{r}
+ggplot(data=coral)+
+  geom_ribbon(aes(ymin = coral_cover - ci, 
+                  ymax = coral_cover + ci, 
+                  x = report_year), fill = "skyblue", alpha = .4)+
+  geom_point(data = subset(coral, report_year==2024), aes(report_year, coral_cover))+
+  geom_line(aes(report_year, coral_cover))+
+  theme_classic()+
+  ylim(0, 50)
+```
+
+# Cane toad spread
+
+For the 2023 report we included a special figure on cane toad spread using [Atlas of Living Australia (ALA) data](https://www.ala.org.au/).
+
+First, configure galah credentials to access ALA data. 
+
+```{r}
+alah_config(email = readChar("apikey_google.txt", nchars = file.info("apikey_google.txt")$size))
+```
+
+Next, call a download of cane toad records applying filtering.
+
+```{r}
+# call data
+toads_ala <- galah_call() %>%
+  galah_identify("Rhinella marina") %>%
+  galah_select(group = "basic",
+               basisOfRecord,
+               coordinateUncertaintyInMeters,
+               occurrenceStatus) %>%
+  atlas_occurrences() %>%
+  clean_names()
+
+# save ala data so I dont need to repeat the download call
+write.csv(toads_ala, "Rhinella_marina_ala.csv", row.names = FALSE)
+
+# apply additional filtering 
+toads <- read_csv("Rhinella_marina_ala.csv") %>%
+  filter(occurrence_status == "PRESENT", # remove absences
+         basis_of_record %in% c("OCCURRENCE", "OBSERVATION", #obs only
+                                "HUMAN_OBSERVATION","MACHINE_OBSERVATION"),
+         !is.na(event_date), #remove no date
+         !is.na(decimal_longitude),
+         !is.na(decimal_latitude),
+         !str_ends(1, pattern = "000"), # remove dubious coords
+         !str_ends(2, pattern = "000"),
+         !coordinate_uncertainty_in_meters>2000) %>% # remove >2km uncertainty
+  mutate(year = year(event_date))
+```
+
+Next rasterise convex hulls by time windows.
+
+```{r}
+# rasterise by time bin, convert to concave hull and smooth range map
+base_raster <- rast(ncol=62.5, nrow=52.3, xmin=105.5, xmax=168, ymin=-43, ymax=-9.3)
+ch_ratio <- c(.25, .22, .15, .11)
+yearA <- c(1970, 2000, 2020, 2024)
+yearB <- c(1900, 1970, 2000, 2020)
+toad_maps <- data.frame()
+
+for(i in 1:4){
+  temp <- subset(toads, year<yearA[i] & year>=yearB[i]) %>%
+    select(c(5,4)) %>%
+    data.matrix() %>%
+    rasterize(base_raster, fun = "max") %>%
+    as.polygons() %>%
+    st_as_sf() %>%
+    drop_crumbs(threshold = units::set_units(10000, km^2)) %>% # drop single cell polygons
+    st_concave_hull(ratio = ch_ratio[i]) %>% # variable concave hull ratio by time period
+    smooth(method = "ksmooth") %>%
+    vect() %>%
+    crop(oz) %>%
+    st_as_sf()  %>%
+    mutate(bin = paste("pre", yearA[i], sep = "_"),
+           factor = i ) %>%
+    select(!max)
+  
+  toad_maps <- rbind(toad_maps, temp)
+}
+
+toad_maps <- arrange(toad_maps, -factor)
+```
+
+Finally plot map.
+
+```{r}
+ggplot()+
+  geom_sf(data = toad_maps, aes(fill = bin), colour = NA)+
+  geom_sf(data = oz, fill = NA)+
+  theme_void()+
+  theme(legend.position = c(.85, .5))+
+  #geom_point(data = toads, aes(decimal_longitude, decimal_latitude))
+  scale_fill_manual(values = c("wheat", "tan2", "darkorange3","brown"),
+                     labels = c("Pre 1970", "1970-1999",
+                                "2000-2019", "2020-2023"))+
+  labs(fill = "Time Period")
+```
 
