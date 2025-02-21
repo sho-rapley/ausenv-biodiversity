@@ -535,6 +535,102 @@ ggsave("map_with_territories.png",
        dpi = 400)
 ```
 
+### Changes
+
+Decided to not repeat the 2023 report and instead of totals by IBRA subregion, we will do listing changes. First, filter the snes grids to changes in 2024.
+
+```{r}
+# standardise snes naming convention to epbc list
+snes2 <- snes %>%
+  select(scientific_name, vernacular_name) %>%
+  rename(name = vernacular_name) %>%
+  distinct() %>%
+  left_join(taxon, by = c("scientific_name" = "listed_as")) %>%
+  mutate(
+    # Remove subspecies notation
+    scientific_name = str_remove(scientific_name, "subsp\\. "),
+    # Create standardised name
+    species = case_when(
+      # If there's an accepted name in taxon, use that
+      !is.na(accepted_name) ~ accepted_name,
+      # If the name is in epbc list, keep it as is (with parentheses)
+      scientific_name %in% epbc$species ~ scientific_name,
+      # Otherwise remove parenthetical text
+      TRUE ~ str_remove_all(scientific_name, "\\s*\\([^)]+\\)")
+    )
+  ) %>%
+  # drop old names
+  select(!c(scientific_name, accepted_name))
+
+# read in changes to the list in 2024
+epbc_changes <- read_excel("data/epbc_changes_since2023_2024.xlsx", sheet = 1) %>%
+  clean_names() %>%
+  # drop effective date and add year
+  select(!effective) %>%
+  mutate(year = 2024) %>%
+  # remove trailing whitespace 
+  mutate(species = str_trim(species)) %>%
+  # keep only additions, not transfers 
+  mutate(type = ifelse(str_detect(status, "Transfer"), "transfer", "addition")) %>%
+  filter(type == "addition")
+
+# select only snes species changes in 2024
+snes2024 <- snes2 %>%
+  filter(species %in% epbc_changes$species)
+
+# check length
+length(unique(snes2024$species))
+```
+
+Yes, correct length of 41 species. 
+
+Next, calculate the number of additions per IBRA subregion.
+
+```{r}
+# find which snes2024 polygons intersect with which ibra regions
+ibra_changes <- terra::intersect(snes2024, ibra)
+
+# sum of additions by ibra subregion intersects
+ibra_changes_count <- ibra_changes %>%
+  st_as_sf() %>%
+  st_drop_geometry() %>%
+  left_join(epbc_changes) %>%
+  select(species, reg_name) %>%
+  distinct() %>%
+  group_by(reg_name) %>%
+  summarise(additions = length(species))
+
+# polygons with counts
+ibra_changes_count_map <- left_join(ibra, ibra_changes_count)
+```
+
+Last, map.
+
+```{r}
+# using the package showtext to get the custom font
+font_add(family = "UniNeue-Trial-Book", regular = "fonts/UniNeue-Trial-Book.ttf")
+showtext_auto()
+
+# plot ibra subregions coloured by change in EPBC listing
+map_changes <- ggplot() +
+  geom_spatvector(data = ibra_changes_count_map, aes(fill = additions), colour = NA) +
+  scale_fill_gradient(
+    low = "white",
+    high = "firebrick4",
+    guide = guide_colorbar(
+      title = NULL,
+      label.theme = element_text(size = 16, family = "UniNeue-Trial-Book")
+    )) +
+  theme_void()
+
+# save
+ggsave("map_additions_2024.png", 
+       map_changes, 
+       width = 8,    # Increased width for better text spacing
+       height = 5,  # Slightly increased height
+       dpi = 400)
+```
+
 # Coral cover
 
 In the oceans section of the report we include annual trends in Great Barrier Reef coral cover. Coral cover is collected by the Australian Institute of Marine Science (AIMS) using a benthos manta tow method.
