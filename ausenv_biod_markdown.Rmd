@@ -532,7 +532,8 @@ ggsave("map_with_territories.png",
        map_with_territories, 
        width = 8,    # Increased width for better text spacing
        height = 5,  # Slightly increased height
-       dpi = 400)
+       dpi = 400,
+       bg = "white")
 ```
 
 ### Changes
@@ -604,6 +605,20 @@ ibra_changes_count <- ibra_changes %>%
 ibra_changes_count_map <- left_join(ibra, ibra_changes_count)
 ```
 
+Good. But we'll need to provide insets for the non-terrestrial listings in 2024, which were:
+
+* Dusky sea snake (Timor Sea, marine)
+* Whitesnout Anemonefish (Lord Howe Island, marine)
+
+And the species removed from the list:
+
+* Bluefin Tuna (marine)
+
+```{r}
+marine <- data.frame(location = c("Timor Sea, marine  1", "Lord Howe island, marine  1", "Marine -1"),
+                     count = c(1, 1, NA)) # using NA for the +1 for ease of addition
+```
+
 Last, map.
 
 ```{r}
@@ -617,18 +632,43 @@ map_changes <- ggplot() +
   scale_fill_gradient(
     low = "white",
     high = "firebrick4",
+    na.value = "lightblue",
+    limits = c(0,16),
     guide = guide_colorbar(
       title = NULL,
-      label.theme = element_text(size = 16, family = "UniNeue-Trial-Book")
+      label.theme = element_text(size = 50, family = "UniNeue-Trial-Book")
     )) +
-  theme_void()
+  theme_void()+
+  geom_point(
+    data = marine,
+    aes(x = 154, y = -45 + (seq_along(location) * 1.5),
+        fill = count),
+    colour = "gray",
+    size = 5,
+    shape = 21,
+    show.legend = FALSE
+  ) +
+  geom_text(
+    data = marine,
+    aes(x = 155, y = -45 + (seq_along(location) * 1.5)),
+    label = marine$location,
+    hjust = 0,
+    vjust = 0.5,
+    size = 16,  
+    family = "UniNeue-Trial-Book"  # Make sure to specify font family here
+  ) +
+  coord_sf(clip = "off") +
+  theme(plot.margin = margin(r = 110, b = 10))
+
+# note: font looks crazy in r plot viewer but is correct afte ggsave
 
 # save
-ggsave("map_additions_2024.png", 
+ggsave("2024_changes_map.png", 
        map_changes, 
-       width = 8,    # Increased width for better text spacing
-       height = 5,  # Slightly increased height
-       dpi = 400)
+       width = 8,   
+       height = 5,  
+       dpi = 400,
+       bg = "white")
 ```
 
 # Coral cover
